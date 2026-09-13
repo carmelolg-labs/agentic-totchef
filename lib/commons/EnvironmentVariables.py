@@ -47,6 +47,18 @@ def get_thinking_mode(default: str = None) -> str:
     """
     return os.getenv("THINKING_MODE", default)
 
+def is_thinking_mode_enabled() -> bool:
+    """
+    Parses THINKING_MODE as an actual boolean.
+
+    Any value other than the case-insensitive string "true" (including "False",
+    "0", or unset) is treated as disabled.
+
+    Returns:
+        bool: True if THINKING_MODE is set to "true" (case-insensitive), False otherwise.
+    """
+    return str(get_thinking_mode()).strip().lower() == "true"
+
 def get_kindergarten_api_host(default: str = None) -> str:
     """
     Get the kindergarten API host from environment variables.
@@ -106,3 +118,16 @@ def get_llm_provider(default: str = None) -> str:
         str: The LLM provider name or the default value.
     """
     return os.getenv("LLM_PROVIDER", default)
+
+def get_ollama_host(default: str = None) -> str:
+    """
+    Get the Ollama server base URL from environment variables.
+
+    Args:
+        default (str, optional): Default value if OLLAMA_HOST is not set. Defaults to None,
+            which lets the Ollama client fall back to its own default (http://localhost:11434).
+
+    Returns:
+        str: The Ollama server base URL or the default value.
+    """
+    return os.getenv("OLLAMA_HOST", default)

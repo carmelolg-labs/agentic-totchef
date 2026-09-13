@@ -9,11 +9,12 @@ Agentic Totchef is a small, local-first example that demonstrates how to build g
 
 ## Key features
 
-- ReAct-style agent orchestration with Ollama for step-by-step reasoning and tool-calling.
-- Domain tools for Home Kitchen and Kindergarten workflows (HTTP-based tools).
-- Pluggable LLM provider architecture via LLMProviderFactory.
-- Works with local Ollama models and supports embeddings for contextual retrieval.
-- Verbose tracing and error handling to aid development and debugging.
+- LangGraph-based batch workflow (`StateGraph`) orchestrating menu generation, merging and shopping-list steps, with kindergarten/home menus generated in parallel.
+- A LangGraph ReAct agent (`langchain.agents.create_agent`) for the chatbot, with proper multi-round tool-calling and cross-turn conversation memory (`InMemorySaver`, scoped per session/browser tab).
+- Domain tools for Home Kitchen and Kindergarten workflows (HTTP-based tools), exposed as LangChain `@tool`-decorated functions.
+- Chroma-backed (in-memory, no server) semantic matching for fuzzy category lookups, embedding with a local Ollama model.
+- 100% local/free: Ollama for both chat and embedding models, Chroma runs embedded — no cloud APIs or paid services required.
+- Verbose tracing and error handling (incl. structured logging for HTTP fallbacks) to aid development and debugging.
 
 ## Prerequisites
 
@@ -43,6 +44,8 @@ EMBEDDING_MODEL=nomic-embed-text:latest
 LANGUAGE_MODEL=qwen3:latest
 THINKING_MODE=True
 LLM_PROVIDER=ollama
+# Optional: Ollama server base URL. If not set, defaults to http://localhost:11434
+OLLAMA_HOST=http://localhost:11434
 
 # Optional HTTP service hosts used by the domain tools
 # If not set, defaults are under static folder under .json files

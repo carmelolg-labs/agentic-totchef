@@ -1,71 +1,71 @@
 """
 Knowledge Service Module
-Provides functions to build a knowledge graph from a dataset and retrieve relevant chunks based on a query.
+Provides a Chroma-backed semantic matching function to find the best matching
+chunk of text for a given query, used for fuzzy category lookups.
 """
 
-from lib.commons.MathUtils import cosine_similarity
-from lib.core.providers.LLMProviderFactory import LLMProviderFactory
+import threading
+import uuid
+from typing import Iterable, Optional, Dict, Any
 
-current_provider = LLMProviderFactory.get_instance()
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaEmbeddings
 
-def build_knowledge(dataset):
-    """Builds a knowledge graph from a dataset.
-    Args: dataset (list): A list of lines.
-    """
-    knowledge = []
-    for i, chunk in enumerate(dataset):
-        embedding = current_provider.embed(text=chunk)
-        knowledge.append((chunk, embedding))
-    return knowledge
+from lib.commons.EnvironmentVariables import get_embedding_model, get_ollama_host
 
-def get_most_relevant_chunks(query, knowledge, top_n=3):
-        """Finds the most relevant chunks from a knowledge base based on a query.
+_embeddings = OllamaEmbeddings(model=get_embedding_model(), base_url=get_ollama_host())
 
-        Args:
-            query (str): The input query string to find relevant chunks for.
-            knowledge (list): A list of tuples where each tuple contains a chunk (str)
-                and its corresponding embedding (list or array).
-            top_n (int, optional): The number of most relevant chunks to return. Defaults to 3.
+# chromadb's Rust-backed SharedSystemClient is not safe under concurrent
+# construction/teardown: an agent turn that fires several tool calls at once
+# (LangGraph's ToolNode dispatches those in parallel via its own thread pool)
+# can hit "AttributeError: 'RustBindingsAPI' object has no attribute
+# 'bindings'" when two threads build/release a chromadb.Client() at the same
+# instant. Serializing access here is cheap (a few ms per call) and removes
+# the race regardless of where the concurrency comes from.
+_chroma_lock = threading.Lock()
 
-        Returns:
-            list: A list of the top N most relevant chunks, each represented as a tuple
-                containing the chunk (str) and its similarity score (float).
-        """
-        query_embedding = current_provider.embed(text=query)
-        # Temporary list to store (chunk, similarity) pairs
-        similarities = []
-        for chunk, embedding in knowledge:
-            similarity = cosine_similarity(query_embedding, embedding)
-            similarities.append((chunk, similarity))
 
-        # Sort by similarity in descending order, because higher similarity means more relevant chunks
-        similarities.sort(key=lambda x: x[1], reverse=True)
-
-        # Finally, return the top N most relevant chunks
-        return similarities[:top_n]
-
-def get_best_matching_chunk(query, chunks):
+def get_best_matching_chunk(query: str, chunks: Iterable[str]) -> Optional[Dict[str, Any]]:
     """Finds the best matching chunk from a list of chunks based on a query.
+
+    Builds an ephemeral, in-memory Chroma collection from the given chunks
+    (rebuilt on every call since the dataset is small and static) and returns
+    the closest match by cosine similarity.
 
     Args:
         query (str): The input query string to find the best matching chunk for.
-        chunks (list): A list of chunk strings.
+        chunks (Iterable[str]): An iterable of chunk strings.
     Returns:
-        dict: A dictionary containing the best matching chunk and its similarity score.
+        Optional[Dict[str, Any]]: A dictionary containing the best matching chunk
+            and its cosine similarity score, or None if no match is found.
     """
-    query_embedding = current_provider.embed(text=query)
-    best_match = None
-    highest_similarity = -1  # Initialize with a very low value
-
-    for chunk in chunks:
-        chunk_embedding = current_provider.embed(text=chunk)
-        similarity = cosine_similarity(query_embedding, chunk_embedding)
-
-        if similarity > highest_similarity:
-            highest_similarity = similarity
-            best_match = chunk
-
-    if best_match is not None:
-        return {"match": best_match, "similarity": highest_similarity}
-    else:
+    chunks = list(chunks)
+    if not query or not chunks:
         return None
+
+    # A unique collection_name per call keeps this isolated: chromadb's
+    # default in-memory client shares one underlying store across every
+    # Chroma instance in the process, so a fixed/default name would silently
+    # accumulate chunks from every previous call instead of matching only
+    # against `chunks`. The store itself is still shared, so the collection
+    # is explicitly deleted afterwards — otherwise it (and its embedded
+    # vectors) would leak in that shared store for the lifetime of the process.
+    with _chroma_lock:
+        store = Chroma.from_texts(
+            texts=chunks,
+            embedding=_embeddings,
+            collection_name=str(uuid.uuid4()),
+            collection_metadata={"hnsw:space": "cosine"},
+        )
+        try:
+            results = store.similarity_search_with_score(query, k=1)
+        finally:
+            store.delete_collection()
+
+    if not results:
+        return None
+
+    document, distance = results[0]
+    similarity = 1 - distance
+
+    return {"match": document.page_content, "similarity": similarity}

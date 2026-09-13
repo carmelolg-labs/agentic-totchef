@@ -43,6 +43,17 @@ class TestKindergartenHttpService:
             result = svc.get_summer_menu()
         assert result == menu
 
+    def test_get_summer_menu_falls_back_to_winter_when_no_data(self, caplog):
+        winter_menu = {"week": {"1": {"monday": "pasta"}}}
+        svc = KindergartenHttpService()
+        with caplog.at_level("WARNING"):
+            with patch.object(svc, "get", return_value=None), \
+                 patch.object(svc, "get_winter_menu", return_value=winter_menu) as mock_winter:
+                result = svc.get_summer_menu()
+        mock_winter.assert_called_once()
+        assert result == winter_menu
+        assert "falling back to the winter menu" in caplog.text
+
     def test_get_current_menu_winter_when_november(self):
         svc = KindergartenHttpService()
         menu = {"week": {}}

@@ -28,19 +28,21 @@ class TestGenericHttpService:
 
         assert result == {"data": "value"}
 
-    def test_get_falls_back_to_file_when_api_fails(self):
+    def test_get_falls_back_to_file_when_api_fails(self, caplog):
         import requests as req
         fallback_data = {"fallback": True}
 
-        with patch("lib.core.integration.http.GenericHttpService.requests.get", side_effect=req.exceptions.RequestException("connection error")):
-            with patch("builtins.open", mock_open(read_data=json.dumps(fallback_data))):
-                result = self.service.get(
-                    api_host="http://api.example.com",
-                    api_path="endpoint",
-                    fallback_path="fallback.json"
-                )
+        with caplog.at_level("WARNING"):
+            with patch("lib.core.integration.http.GenericHttpService.requests.get", side_effect=req.exceptions.RequestException("connection error")):
+                with patch("builtins.open", mock_open(read_data=json.dumps(fallback_data))):
+                    result = self.service.get(
+                        api_host="http://api.example.com",
+                        api_path="endpoint",
+                        fallback_path="fallback.json"
+                    )
 
         assert result == fallback_data
+        assert "falling back to local file" in caplog.text
 
     def test_get_falls_back_to_file_when_no_api_host(self):
         fallback_data = [{"item": 1}]
@@ -54,17 +56,31 @@ class TestGenericHttpService:
 
         assert result == fallback_data
 
-    def test_get_returns_none_when_fallback_file_missing(self):
+    def test_get_returns_none_when_fallback_file_missing(self, caplog):
         import requests as req
-        with patch("lib.core.integration.http.GenericHttpService.requests.get", side_effect=req.exceptions.RequestException("connection error")):
-            with patch("builtins.open", side_effect=FileNotFoundError):
+        with caplog.at_level("ERROR"):
+            with patch("lib.core.integration.http.GenericHttpService.requests.get", side_effect=req.exceptions.RequestException("connection error")):
+                with patch("builtins.open", side_effect=FileNotFoundError):
+                    result = self.service.get(
+                        api_host="http://api.example.com",
+                        api_path="endpoint",
+                        fallback_path="missing.json"
+                    )
+
+        assert result is None
+        assert "Fallback file not found" in caplog.text
+
+    def test_get_returns_none_when_fallback_json_invalid(self, caplog):
+        with caplog.at_level("ERROR"):
+            with patch("builtins.open", mock_open(read_data="not valid json")):
                 result = self.service.get(
-                    api_host="http://api.example.com",
-                    api_path="endpoint",
-                    fallback_path="missing.json"
+                    api_host=None,
+                    api_path=None,
+                    fallback_path="broken.json"
                 )
 
         assert result is None
+        assert "invalid JSON" in caplog.text
 
     def test_get_is_callable_on_subclass_instance(self):
         """Subclasses that call self.get(...) must still work."""

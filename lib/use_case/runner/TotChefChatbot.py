@@ -6,10 +6,18 @@ for culinary and nutritional assistance. It supports both command-line and GUI i
 integrating tools from KindergartenTools and HomeKitchenTools.
 """
 
-from lib.adapters.outbound.LLMExecutor import chat
-from lib.use_case.tools import KindergartenTools, HomeKitchenTools
+import uuid
+
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessageChunk
+from langchain_ollama import ChatOllama
+from langgraph.checkpoint.memory import InMemorySaver
 from html_sanitizer import Sanitizer
 from nicegui import ui
+
+from lib.commons.EnvironmentVariables import get_language_model, get_ollama_host, is_thinking_mode_enabled
+from lib.use_case.tools import KindergartenTools, HomeKitchenTools
+
 
 class TotChefChatbot:
     """
@@ -21,13 +29,17 @@ class TotChefChatbot:
         """
         Initialize the TotChefChatbot instance.
 
-        Sets up the LLM executor and combines available functions from
-        KindergartenTools and HomeKitchenTools.
+        Builds a LangGraph ReAct-style agent (via create_agent) over the combined
+        KindergartenTools/HomeKitchenTools tools, with an in-memory checkpointer
+        so conversation history is preserved across turns within a thread_id.
         """
-        self.chat_func = chat
-        self.tools = {}
-        self.tools.update(KindergartenTools.available_functions())
-        self.tools.update(HomeKitchenTools.available_functions())
+        model = ChatOllama(
+            model=get_language_model(),
+            base_url=get_ollama_host(),
+            reasoning=is_thinking_mode_enabled(),
+        )
+        tools = KindergartenTools.get_tools() + HomeKitchenTools.get_tools()
+        self.agent = create_agent(model=model, tools=tools, checkpointer=InMemorySaver())
 
     def run(self):
         """
@@ -35,9 +47,11 @@ class TotChefChatbot:
 
         The chatbot utilizes functions from KindergartenTools and HomeKitchenTools
         to assist users with culinary and nutritional queries. Type 'exit' or 'quit'
-        to end the session.
+        to end the session. The whole CLI session shares one thread_id, so the agent
+        keeps conversation memory across turns.
         """
         print("Welcome to TotChef Chat! Type 'exit' or 'quit' to end the chat.")
+        thread_id = str(uuid.uuid4())
 
         # Start chat
         while True:
@@ -46,25 +60,31 @@ class TotChefChatbot:
                 break
             else:
                 print('Assistant >', end=' ')
-                stream = self._chat(user_prompt)
-                # print the response from the chatbot in real-time
-                for chunk in stream:
-                    print(chunk['message']['content'], end='', flush=True)
+                for chunk_text in self._chat(user_prompt, thread_id):
+                    print(chunk_text, end='', flush=True)
 
-    def _chat(self, user_prompt: str):
+    def _chat(self, user_prompt: str, thread_id: str):
         """
-        Chat with the TotChef chatbot using the provided user prompt.
-
-        This method integrates functions from KindergartenTools and HomeKitchenTools
-        to enhance the chatbot's capabilities.
+        Chat with the TotChef agent using the provided user prompt, streaming
+        only the assistant's text deltas (tool-call/tool-result chunks are
+        filtered out).
 
         Args:
             user_prompt (str): The prompt or question from the user.
+            thread_id (str): Conversation thread id, scoping memory to one
+                session (CLI run, or one NiceGUI client).
 
-        Returns:
-            A stream of responses from the chatbot.
+        Yields:
+            str: Incremental text chunks of the assistant's reply.
         """
-        return self.chat_func(prompt=user_prompt, tools=self.tools)
+        config = {"configurable": {"thread_id": thread_id}}
+        for chunk, _metadata in self.agent.stream(
+            {"messages": [{"role": "user", "content": user_prompt}]},
+            config=config,
+            stream_mode="messages",
+        ):
+            if isinstance(chunk, AIMessageChunk) and chunk.content:
+                yield chunk.content
 
     def _root(self):
         """
@@ -132,12 +152,12 @@ class TotChefChatbot:
                 }
             </style>
         ''')
-        
+
         # Add professional nutritionist header
         with ui.element('div').classes('header-container'):
             ui.html('<h1 class="header-title">🥗 TotChef Nutritionist</h1>', sanitize=False)
             ui.html('<p class="header-subtitle">Your Personal AI Nutrition & Culinary Expert</p>', sanitize=False)
-        
+
         async def send() -> None:
             question = text.value
             text.value = ''
@@ -148,8 +168,9 @@ class TotChefChatbot:
 
             await ui.run_javascript('window.scrollTo(0, document.body.scrollHeight)')
             response = ''
-            for chunk in self._chat(question):
-                response += chunk['message']['content']
+            thread_id = ui.context.client.id
+            for chunk_text in self._chat(question, thread_id):
+                response += chunk_text
                 with response_message.clear():
                     ui.html(response, sanitize=Sanitizer().sanitize)
                     await ui.run_javascript('window.scrollTo(0, document.body.scrollHeight)')

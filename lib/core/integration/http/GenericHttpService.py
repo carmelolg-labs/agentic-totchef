@@ -8,6 +8,9 @@ on the class.
 from typing import Any
 import requests
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GenericHttpService:
@@ -33,12 +36,18 @@ class GenericHttpService:
                 response = requests.get(f"{api_host}/{api_path}")
                 response.raise_for_status()
                 return response.json()
-            except requests.exceptions.RequestException:
-                # Fallback to local file if the API request fails
-                pass
+            except requests.exceptions.RequestException as exc:
+                logger.warning(
+                    "GET %s/%s failed (%s); falling back to local file %s",
+                    api_host, api_path, exc, fallback_path,
+                )
 
         try:
             with open(fallback_path) as json_file:
                 return json.load(json_file)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except FileNotFoundError:
+            logger.error("Fallback file not found: %s", fallback_path)
+            return None
+        except json.JSONDecodeError as exc:
+            logger.error("Fallback file %s contains invalid JSON: %s", fallback_path, exc)
             return None

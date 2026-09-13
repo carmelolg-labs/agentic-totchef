@@ -1,19 +1,22 @@
 """
 Kindergarten Tools module for retrieving kindergarten menu information.
 """
+from typing import List
+
+from langchain_core.tools import BaseTool, tool
+
 from lib.use_case.integration.http.KindergartenHttpService import KindergartenHttpService
 
 
-def available_functions() -> dict:
+def get_tools() -> List[BaseTool]:
     """
-    Returns a dictionary of available functions for kindergarten menu retrieval
-    :return: dictionary of functions
+    Returns the list of available tools for kindergarten menu retrieval
+    :return: list of tools
     """
-    return {
-        "get_kindergarten_menu": get_kindergarten_menu
-    }
+    return [get_kindergarten_menu]
 
 
+@tool
 def get_kindergarten_menu(week: int = 1) -> dict:
     """
     Get the kindergarten menu for a specified week

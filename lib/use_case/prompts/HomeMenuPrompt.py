@@ -11,4 +11,4 @@ class GenerateHomeMenuPrompt(FilePromptManager):
         )
 
     def get_user_prompt(self):
-        return self.user_prompt_template
+        return self.user_prompt_template.format()

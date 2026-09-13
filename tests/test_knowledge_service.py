@@ -1,67 +1,91 @@
 """
 Unit tests for lib.core.service.KnowledgeService.
+
+The Ollama embedding calls are mocked with deterministic one-hot vectors so
+Chroma's cosine similarity math is exact and reproducible, with no network
+call to a real Ollama server.
 """
 
-from unittest.mock import patch, MagicMock
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 import lib.core.service.KnowledgeService as ks
 
 
-class TestKnowledgeService:
-    def _mock_embed(self, vectors):
-        """Helper: returns a side_effect function that returns vectors in order."""
-        iterator = iter(vectors)
-
-        def embed_fn(text):
-            return next(iterator)
-
-        return embed_fn
-
-    def test_build_knowledge(self):
-        vectors = [[1.0, 0.0], [0.0, 1.0]]
-        dataset = ["chunk1", "chunk2"]
-        with patch.object(ks, "current_provider") as mock_provider:
-            mock_provider.embed.side_effect = vectors
-            result = ks.build_knowledge(dataset)
-        assert len(result) == 2
-        assert result[0] == ("chunk1", [1.0, 0.0])
-        assert result[1] == ("chunk2", [0.0, 1.0])
-
-    def test_get_most_relevant_chunks(self):
-        # knowledge: (chunk, embedding)
-        knowledge = [
-            ("about cats", [1.0, 0.0]),
-            ("about dogs", [0.0, 1.0]),
-            ("about fish", [0.5, 0.5]),
-        ]
-        query_embedding = [1.0, 0.0]  # most similar to cats
-        with patch.object(ks, "current_provider") as mock_provider:
-            mock_provider.embed.return_value = query_embedding
-            result = ks.get_most_relevant_chunks("cats", knowledge, top_n=2)
-        assert len(result) == 2
-        # first result should have highest similarity
-        assert result[0][0] == "about cats"
-
-    def test_get_best_matching_chunk_returns_match(self):
+class TestGetBestMatchingChunk:
+    def test_returns_best_match_with_similarity(self):
         chunks = ["apple", "banana", "cherry"]
-        query_vec = [1.0, 0.0, 0.0]
-        # embeddings: apple is most similar to query
-        embeddings = {
+        doc_vectors = {
             "apple": [1.0, 0.0, 0.0],
             "banana": [0.0, 1.0, 0.0],
             "cherry": [0.0, 0.0, 1.0],
         }
-        with patch.object(ks, "current_provider") as mock_provider:
-            def embed_fn(text):
-                return embeddings.get(text, query_vec)
-            mock_provider.embed.side_effect = embed_fn
-            # first call is for query
-            result = ks.get_best_matching_chunk("apple", chunks)
+
+        with patch.object(ks, "_embeddings") as mock_embeddings:
+            mock_embeddings.embed_documents.side_effect = (
+                lambda texts: [doc_vectors[t] for t in texts]
+            )
+            mock_embeddings.embed_query.return_value = doc_vectors["apple"]
+
+            result = ks.get_best_matching_chunk("apple-ish query", chunks)
+
         assert result is not None
         assert result["match"] == "apple"
         assert result["similarity"] == 1.0
 
-    def test_get_best_matching_chunk_returns_none_when_empty(self):
-        with patch.object(ks, "current_provider") as mock_provider:
-            mock_provider.embed.return_value = [1.0, 0.0]
-            result = ks.get_best_matching_chunk("query", [])
+    def test_returns_none_when_chunks_empty(self):
+        result = ks.get_best_matching_chunk("query", [])
         assert result is None
+
+    def test_returns_none_when_query_empty(self):
+        result = ks.get_best_matching_chunk("", ["apple", "banana"])
+        assert result is None
+
+    def test_low_similarity_still_returns_closest_match(self):
+        chunks = ["carbohydrates", "proteins", "vegetables"]
+        doc_vectors = {
+            "carbohydrates": [1.0, 0.0, 0.0],
+            "proteins": [0.0, 1.0, 0.0],
+            "vegetables": [0.0, 0.0, 1.0],
+        }
+        # query orthogonal to "vegetables" but closest (45 degrees) to "carbohydrates"
+        query_vector = [0.5, 0.0, 0.5]
+
+        with patch.object(ks, "_embeddings") as mock_embeddings:
+            mock_embeddings.embed_documents.side_effect = (
+                lambda texts: [doc_vectors[t] for t in texts]
+            )
+            mock_embeddings.embed_query.return_value = query_vector
+
+            result = ks.get_best_matching_chunk("something unrelated", chunks)
+
+        assert result is not None
+        assert result["match"] in ("carbohydrates", "vegetables")
+        assert 0.0 < result["similarity"] < 1.0
+
+    def test_concurrent_calls_do_not_race(self):
+        """Regression test for the _chroma_lock: several threads hammering
+        get_best_matching_chunk at once (mirroring LangGraph's ToolNode
+        dispatching multiple tool calls in parallel within one agent turn)
+        must not raise, since Chroma's client construction/teardown is not
+        thread-safe without the lock.
+        """
+        chunks = ["carbohydrates", "proteins", "vegetables"]
+        doc_vectors = {
+            "carbohydrates": [1.0, 0.0, 0.0],
+            "proteins": [0.0, 1.0, 0.0],
+            "vegetables": [0.0, 0.0, 1.0],
+        }
+
+        with patch.object(ks, "_embeddings") as mock_embeddings:
+            mock_embeddings.embed_documents.side_effect = (
+                lambda texts: [doc_vectors[t] for t in texts]
+            )
+            mock_embeddings.embed_query.return_value = doc_vectors["proteins"]
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(executor.map(
+                    lambda _: ks.get_best_matching_chunk("protein-ish", chunks),
+                    range(16),
+                ))
+
+        assert all(r is not None and r["match"] == "proteins" for r in results)

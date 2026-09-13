@@ -13,6 +13,8 @@ from lib.commons.EnvironmentVariables import (
     get_kindergarten_api_path,
     get_home_kitchen_api_path,
     get_llm_provider,
+    get_ollama_host,
+    is_thinking_mode_enabled,
 )
 
 
@@ -80,3 +82,27 @@ class TestEnvironmentVariables:
     def test_get_llm_provider_returns_default(self):
         with patch.dict(os.environ, {}, clear=True):
             assert get_llm_provider("ollama") == "ollama"
+
+    def test_get_ollama_host_returns_env_value(self):
+        with patch.dict(os.environ, {"OLLAMA_HOST": "http://ollama-host:11434"}):
+            assert get_ollama_host() == "http://ollama-host:11434"
+
+    def test_get_ollama_host_returns_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_ollama_host("http://localhost:11434") == "http://localhost:11434"
+
+    def test_is_thinking_mode_enabled_true(self):
+        with patch.dict(os.environ, {"THINKING_MODE": "True"}):
+            assert is_thinking_mode_enabled() is True
+
+    def test_is_thinking_mode_enabled_false_string(self):
+        with patch.dict(os.environ, {"THINKING_MODE": "False"}):
+            assert is_thinking_mode_enabled() is False
+
+    def test_is_thinking_mode_enabled_unset(self):
+        with patch.dict(os.environ, {}, clear=True):
+            assert is_thinking_mode_enabled() is False
+
+    def test_is_thinking_mode_enabled_case_insensitive(self):
+        with patch.dict(os.environ, {"THINKING_MODE": "TRUE"}):
+            assert is_thinking_mode_enabled() is True

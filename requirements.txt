@@ -3,3 +3,9 @@ python-dotenv==1.2.1
 requests==2.32.5
 html-sanitizer==2.6.0
 nicegui==3.6.1
+langchain==1.4.0
+langchain-core==1.6.2
+langchain-ollama==1.1.0
+langgraph==1.2.11
+langchain-chroma==1.1.0
+chromadb==1.5.9

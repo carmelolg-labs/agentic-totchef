@@ -1,51 +1,84 @@
 """
 Unit tests for lib.use_case.runner.TotChefChatbot.
+
+The chatbot is now built on langchain.agents.create_agent (LangGraph) with an
+InMemorySaver checkpointer for cross-turn memory, so tests mock `self.agent`
+(and its `.stream()`), rather than the old raw-`ollama`-client `chat_func`.
 """
 
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 
+from langchain_core.messages import AIMessageChunk, ToolMessageChunk
+
 from lib.use_case.runner.TotChefChatbot import TotChefChatbot
 
 
-class TestTotChefChatbot:
-    def test_init_sets_tools(self):
-        chatbot = TotChefChatbot()
-        assert "get_kindergarten_menu" in chatbot.tools
-        assert "get_home_kitchen_recipes" in chatbot.tools
-        assert "get_home_kitchen_recipes_by_category" in chatbot.tools
+class TestTotChefChatbotInit:
+    def test_init_builds_agent_with_combined_tools(self):
+        with patch("lib.use_case.runner.TotChefChatbot.create_agent") as mock_create_agent:
+            TotChefChatbot()
+        _, kwargs = mock_create_agent.call_args
+        tool_names = {t.name for t in kwargs["tools"]}
+        assert tool_names == {
+            "get_kindergarten_menu",
+            "get_home_kitchen_recipes",
+            "get_home_kitchen_recipes_by_category",
+        }
+        assert kwargs["checkpointer"] is not None
 
-    def test_chat_calls_chat_func(self):
-        chatbot = TotChefChatbot()
-        mock_response = MagicMock()
-        chatbot.chat_func = MagicMock(return_value=mock_response)
-        result = chatbot._chat("hello there")
-        chatbot.chat_func.assert_called_once_with(prompt="hello there", tools=chatbot.tools)
-        assert result is mock_response
 
+class TestChat:
+    def test_yields_only_non_empty_ai_message_chunk_content(self):
+        chatbot = TotChefChatbot()
+
+        ai_chunk_1 = AIMessageChunk(content="Hello")
+        ai_chunk_empty = AIMessageChunk(content="")
+        tool_chunk = ToolMessageChunk(content="tool result", tool_call_id="1")
+        ai_chunk_2 = AIMessageChunk(content=" world")
+
+        chatbot.agent = MagicMock()
+        chatbot.agent.stream.return_value = iter([
+            (ai_chunk_1, {}),
+            (tool_chunk, {}),
+            (ai_chunk_empty, {}),
+            (ai_chunk_2, {}),
+        ])
+
+        result = list(chatbot._chat("hi", thread_id="t1"))
+
+        assert result == ["Hello", " world"]
+        call_args, call_kwargs = chatbot.agent.stream.call_args
+        assert call_args[0] == {"messages": [{"role": "user", "content": "hi"}]}
+        assert call_kwargs["config"] == {"configurable": {"thread_id": "t1"}}
+        assert call_kwargs["stream_mode"] == "messages"
+
+
+class TestRun:
     def test_run_exits_on_quit(self):
         chatbot = TotChefChatbot()
-        chatbot.chat_func = MagicMock()
         with patch("builtins.input", side_effect=["quit"]), \
              patch("builtins.print"):
             chatbot.run()  # should not block
 
     def test_run_exits_on_exit(self):
         chatbot = TotChefChatbot()
-        chatbot.chat_func = MagicMock()
         with patch("builtins.input", side_effect=["exit"]), \
              patch("builtins.print"):
             chatbot.run()
 
     def test_run_handles_user_message(self):
         chatbot = TotChefChatbot()
-        stream = [{"message": {"content": "hi"}}, {"message": {"content": "!"}}]
-        chatbot.chat_func = MagicMock(return_value=stream)
-        with patch("builtins.input", side_effect=["hello", "exit"]), \
+        with patch.object(chatbot, "_chat", return_value=iter(["hi", "!"])) as mock_chat, \
+             patch("builtins.input", side_effect=["hello", "exit"]), \
              patch("builtins.print"):
             chatbot.run()
-        chatbot.chat_func.assert_called_once()
+        mock_chat.assert_called_once()
+        args, _ = mock_chat.call_args
+        assert args[0] == "hello"
 
+
+class TestGui:
     def test_gui_calls_ui_run(self):
         chatbot = TotChefChatbot()
         with patch("lib.use_case.runner.TotChefChatbot.ui") as mock_ui:
@@ -96,10 +129,8 @@ class TestTotChefChatbot:
         html_mock = chainable_mock()
         markdown_mock = chainable_mock()
 
-        stream_chunk = {"message": {"content": "response text"}}
-        chatbot.chat_func = MagicMock(return_value=iter([stream_chunk]))
-
-        with patch("lib.use_case.runner.TotChefChatbot.ui") as mock_ui:
+        with patch("lib.use_case.runner.TotChefChatbot.ui") as mock_ui, \
+             patch.object(chatbot, "_chat", return_value=iter(["response text"])) as mock_chat:
             mock_ui.add_head_html = MagicMock()
             mock_ui.element.return_value = element_mock
             mock_ui.html.return_value = html_mock
@@ -112,6 +143,7 @@ class TestTotChefChatbot:
             mock_ui.spinner.return_value = spinner_mock
             mock_ui.markdown.return_value = markdown_mock
             mock_ui.run_javascript = AsyncMock()
+            mock_ui.context.client.id = "client-123"
 
             chatbot._root()
 
@@ -119,6 +151,8 @@ class TestTotChefChatbot:
             assert "send" in send_holder, "send callback was not captured"
             send_fn = send_holder["send"]
 
-            # Provide fresh chunk iterator for the send call
-            chatbot.chat_func = MagicMock(return_value=iter([stream_chunk]))
+            mock_chat.return_value = iter(["response text"])
             asyncio.run(send_fn())
+
+        args, _ = mock_chat.call_args
+        assert args[1] == "client-123"

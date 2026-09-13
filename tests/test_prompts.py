@@ -4,7 +4,9 @@ HomeMenuPrompt, KindergartenMenuPrompt, MergeMenuPrompt, ShoppingListPrompt).
 """
 
 import pytest
-from unittest.mock import patch, mock_open
+from unittest.mock import patch
+
+from langchain_core.prompts import PromptTemplate
 
 from lib.use_case.prompts.FilePromptManager import FilePromptManager
 from lib.use_case.prompts.HomeMenuPrompt import GenerateHomeMenuPrompt
@@ -23,19 +25,28 @@ class ConcreteFilePromptManager(FilePromptManager):
 
 
 class TestFilePromptManager:
+    """PromptTemplate.from_file reads via pathlib.Path.read_text, not the
+    builtins.open() a mock_open() patch would intercept — so these tests
+    patch PromptTemplate.from_file itself instead of the filesystem.
+    """
+
     def test_load_prompt_with_valid_path(self):
-        with patch("builtins.open", mock_open(read_data="system content")):
-            with patch("builtins.open", mock_open(read_data="user content")):
-                mgr = ConcreteFilePromptManager(
-                    system_prompt_path="sys.prompt",
-                    user_prompt_path="usr.prompt",
-                )
-        # The last mock wins; just verify the object was created
+        with patch.object(
+            PromptTemplate, "from_file",
+            return_value=PromptTemplate.from_template("content"),
+        ):
+            mgr = ConcreteFilePromptManager(
+                system_prompt_path="sys.prompt",
+                user_prompt_path="usr.prompt",
+            )
         assert mgr is not None
 
     def test_load_prompt_with_none_path(self):
-        # None path should return empty string without file open
-        with patch("builtins.open", mock_open(read_data="user {name}")) as m:
+        # None path should return empty string without loading a template
+        with patch.object(
+            PromptTemplate, "from_file",
+            return_value=PromptTemplate.from_template("user {name}"),
+        ):
             mgr = ConcreteFilePromptManager(
                 system_prompt_path=None,
                 user_prompt_path="usr.prompt",
@@ -43,7 +54,10 @@ class TestFilePromptManager:
         assert mgr.system_prompt_template == ""
 
     def test_load_prompt_with_empty_path(self):
-        with patch("builtins.open", mock_open(read_data="user content")) as m:
+        with patch.object(
+            PromptTemplate, "from_file",
+            return_value=PromptTemplate.from_template("user content"),
+        ):
             mgr = ConcreteFilePromptManager(
                 system_prompt_path="",
                 user_prompt_path="usr.prompt",
@@ -51,14 +65,19 @@ class TestFilePromptManager:
         assert mgr.system_prompt_template == ""
 
     def test_get_system_prompt_formats(self):
-        with patch("builtins.open", mock_open(read_data="Hello {name}!")):
+        with patch.object(
+            PromptTemplate, "from_file",
+            return_value=PromptTemplate.from_template("Hello {name}!"),
+        ):
             mgr = ConcreteFilePromptManager("sys.prompt", "usr.prompt")
-        # Both templates will be "Hello {name}!" due to mock_open behaviour
         result = mgr.get_system_prompt(name="World")
         assert result == "Hello World!"
 
     def test_get_user_prompt_formats(self):
-        with patch("builtins.open", mock_open(read_data="User: {q}")):
+        with patch.object(
+            PromptTemplate, "from_file",
+            return_value=PromptTemplate.from_template("User: {q}"),
+        ):
             mgr = ConcreteFilePromptManager("sys.prompt", "usr.prompt")
         result = mgr.get_user_prompt(q="test")
         assert result == "User: test"

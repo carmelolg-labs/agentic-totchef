@@ -7,6 +7,6 @@ It launches an interactive graphical user interface chatbot for culinary and nut
 
 from lib.use_case.runner.TotChefChatbot import TotChefChatbot
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__mp_main__"}:
     chatbot = TotChefChatbot()
     chatbot.gui()

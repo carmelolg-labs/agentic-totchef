@@ -1,21 +1,23 @@
 """
 Home Kitchen Tools Module for retrieving home kitchen recipes.
 """
+from typing import List
+
+from langchain_core.tools import BaseTool, tool
+
 from lib.core.service.KnowledgeService import get_best_matching_chunk
 from lib.use_case.integration.http.HomeKitchenHttpService import HomeKitchenHttpService
 
 
-def available_functions() -> dict:
+def get_tools() -> List[BaseTool]:
     """
-    Returns a dictionary of available functions for home kitchen recipes retrieval
-    :return: dictionary of functions
+    Returns the list of available tools for home kitchen recipes retrieval
+    :return: list of tools
     """
-    return {
-        "get_home_kitchen_recipes": get_home_kitchen_recipes,
-        "get_home_kitchen_recipes_by_category": get_home_kitchen_recipes_by_category
-    }
+    return [get_home_kitchen_recipes, get_home_kitchen_recipes_by_category]
 
 
+@tool
 def get_home_kitchen_recipes() -> dict:
     """
     Get home kitchen recipes divided by categories (carbohydrate, protein, vegetables)
@@ -31,6 +33,7 @@ def get_home_kitchen_recipes() -> dict:
     return recipes
 
 
+@tool
 def get_home_kitchen_recipes_by_category(category: str = None) -> dict:
     """
     Get home kitchen recipes based on category (for instance carbohydrate, protein, vegetables)
